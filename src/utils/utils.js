@@ -5,7 +5,7 @@ import os from 'os';
 import { getReasoningSignature, getToolSignature } from './thoughtSignatureCache.js';
 import { setToolNameMapping } from './toolNameCache.js';
 
-// 思维链签名常量
+// 思维链签名常量 - 暂时123占位
 // Claude 模型签名
 const CLAUDE_THOUGHT_SIGNATURE = 'RXFRRENrZ0lDaEFDR0FJcVFKV1Bvcy9GV20wSmtMV2FmWkFEbGF1ZTZzQTdRcFlTc1NvbklmemtSNFo4c1dqeitIRHBOYW9hS2NYTE1TeTF3bjh2T1RHdE1KVjVuYUNQclZ5cm9DMFNETHk4M0hOSWsrTG1aRUhNZ3hvTTl0ZEpXUDl6UUMzOExxc2ZJakI0UkkxWE1mdWJ1VDQrZnY0Znp0VEoyTlhtMjZKL2daYi9HL1gwcmR4b2x0VE54empLemtLcEp0ZXRia2plb3NBcWlRSWlXUHloMGhVVTk1dHNha1dyNDVWNUo3MTJjZDNxdHQ5Z0dkbjdFaFk4dUllUC9CcThVY2VZZC9YbFpYbDc2bHpEbmdzL2lDZXlNY3NuZXdQMjZBTDRaQzJReXdibVQzbXlSZmpld3ZSaUxxOWR1TVNidHIxYXRtYTJ0U1JIRjI0Z0JwUnpadE1RTmoyMjR4bTZVNUdRNXlOSWVzUXNFNmJzRGNSV0RTMGFVOEZERExybmhVQWZQT2JYMG5lTGR1QnU1VGZOWW9NZGlRbTgyUHVqVE1xaTlmN0t2QmJEUUdCeXdyVXR2eUNnTEFHNHNqeWluZDRCOEg3N2ZJamt5blI3Q3ZpQzlIOTVxSENVTCt3K3JzMmsvV0sxNlVsbGlTK0pET3UxWXpPMWRPOUp3V3hEMHd5ZVU0a0Y5MjIxaUE5Z2lUd2djZXhSU2c4TWJVMm1NSjJlaGdlY3g0YjJ3QloxR0FFPQ==';
 // Gemini 思维链签名
@@ -564,10 +564,305 @@ function generateGeminiRequestBody(geminiBody, modelName, token){
   return requestBody;
 }
 
+// ==================== Claude API 转换函数 ====================
+
+/**
+ * 从 Claude 消息内容中提取图片
+ * Claude 格式: { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
+ */
+function extractImagesFromClaudeContent(content) {
+  const result = { text: '', images: [] };
+
+  if (typeof content === 'string') {
+    result.text = content;
+    return result;
+  }
+
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (item.type === 'text') {
+        result.text += item.text || '';
+      } else if (item.type === 'image') {
+        // Claude 格式的图片
+        const source = item.source;
+        if (source && source.type === 'base64' && source.data) {
+          result.images.push({
+            inlineData: {
+              mimeType: source.media_type || 'image/png',
+              data: source.data
+            }
+          });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 处理 Claude 用户消息
+ */
+function handleClaudeUserMessage(extracted, antigravityMessages) {
+  antigravityMessages.push({
+    role: "user",
+    parts: [
+      { text: extracted.text },
+      ...extracted.images
+    ]
+  });
+}
+
+/**
+ * 处理 Claude 助手消息（包含 tool_use）
+ */
+function handleClaudeAssistantMessage(message, antigravityMessages, enableThinking, actualModelName, sessionId) {
+  const lastMessage = antigravityMessages[antigravityMessages.length - 1];
+  const content = message.content;
+  
+  // 解析 content 数组
+  let textContent = '';
+  const toolCalls = [];
+  
+  if (typeof content === 'string') {
+    textContent = content;
+  } else if (Array.isArray(content)) {
+    for (const item of content) {
+      if (item.type === 'text') {
+        textContent += item.text || '';
+      } else if (item.type === 'tool_use') {
+        // Claude 的 tool_use 格式
+        const originalName = item.name;
+        const safeName = sanitizeToolName(originalName);
+        
+        const part = {
+          functionCall: {
+            id: item.id,
+            name: safeName,
+            args: {
+              query: JSON.stringify(item.input || {})
+            }
+          }
+        };
+        
+        // 记录工具名映射
+        if (sessionId && actualModelName && safeName !== originalName) {
+          setToolNameMapping(sessionId, actualModelName, safeName, originalName);
+        }
+        
+        toolCalls.push(part);
+      }
+    }
+  }
+  
+  const hasToolCalls = toolCalls.length > 0;
+  const hasContent = textContent && textContent.trim() !== '';
+  
+  if (lastMessage?.role === "model" && hasToolCalls && !hasContent) {
+    lastMessage.parts.push(...toolCalls);
+  } else {
+    const parts = [];
+    
+    // 思维链处理（与 OpenAI 相同）
+    if (enableThinking) {
+      const cachedSig = getReasoningSignature(sessionId, actualModelName);
+      const thoughtSignature = cachedSig || getThoughtSignatureForModel(actualModelName);
+      parts.push({ text: ' ', thought: true });
+      parts.push({ text: ' ', thoughtSignature });
+    }
+    
+    if (hasContent) parts.push({ text: textContent.trimEnd() });
+    parts.push(...toolCalls);
+    
+    antigravityMessages.push({
+      role: "model",
+      parts
+    });
+  }
+}
+
+/**
+ * 处理 Claude tool_result 消息
+ */
+function handleClaudeToolResult(message, antigravityMessages) {
+  const content = message.content;
+  
+  if (!Array.isArray(content)) return;
+  
+  for (const item of content) {
+    if (item.type !== 'tool_result') continue;
+    
+    const toolUseId = item.tool_use_id;
+    
+    // 从之前的 model 消息中找到对应的 functionCall name
+    let functionName = '';
+    for (let i = antigravityMessages.length - 1; i >= 0; i--) {
+      if (antigravityMessages[i].role === 'model') {
+        const parts = antigravityMessages[i].parts;
+        for (const part of parts) {
+          if (part.functionCall && part.functionCall.id === toolUseId) {
+            functionName = part.functionCall.name;
+            break;
+          }
+        }
+        if (functionName) break;
+      }
+    }
+    
+    const lastMessage = antigravityMessages[antigravityMessages.length - 1];
+    
+    // 提取工具结果内容
+    let resultContent = '';
+    if (typeof item.content === 'string') {
+      resultContent = item.content;
+    } else if (Array.isArray(item.content)) {
+      resultContent = item.content
+        .filter(c => c.type === 'text')
+        .map(c => c.text)
+        .join('');
+    }
+    
+    const functionResponse = {
+      functionResponse: {
+        id: toolUseId,
+        name: functionName,
+        response: {
+          output: resultContent
+        }
+      }
+    };
+    
+    // 如果上一条消息是 user 且包含 functionResponse，则合并
+    if (lastMessage?.role === "user" && lastMessage.parts.some(p => p.functionResponse)) {
+      lastMessage.parts.push(functionResponse);
+    } else {
+      antigravityMessages.push({
+        role: "user",
+        parts: [functionResponse]
+      });
+    }
+  }
+}
+
+/**
+ * 将 Claude 消息转换为 Antigravity 格式
+ */
+function claudeMessageToAntigravity(claudeMessages, enableThinking, actualModelName, sessionId) {
+  const antigravityMessages = [];
+  
+  for (const message of claudeMessages) {
+    if (message.role === "user") {
+      // 检查是否包含 tool_result
+      const content = message.content;
+      if (Array.isArray(content) && content.some(item => item.type === 'tool_result')) {
+        handleClaudeToolResult(message, antigravityMessages);
+      } else {
+        const extracted = extractImagesFromClaudeContent(content);
+        handleClaudeUserMessage(extracted, antigravityMessages);
+      }
+    } else if (message.role === "assistant") {
+      handleClaudeAssistantMessage(message, antigravityMessages, enableThinking, actualModelName, sessionId);
+    }
+  }
+  
+  return antigravityMessages;
+}
+
+/**
+ * 将 Claude 工具格式转换为 Antigravity 格式
+ * Claude: { name, description, input_schema: {...} }
+ * Antigravity/Gemini: { functionDeclarations: [{ name, description, parameters: {...} }] }
+ */
+function convertClaudeToolsToAntigravity(claudeTools, sessionId, actualModelName) {
+  if (!claudeTools || claudeTools.length === 0) return [];
+  
+  return claudeTools.map((tool) => {
+    // 清洗参数
+    const rawParams = tool.input_schema || {};
+    const cleanedParams = cleanParameters(rawParams) || {};
+    
+    // 确保顶层是合法的 JSON Schema 对象
+    if (cleanedParams.type === undefined) {
+      cleanedParams.type = 'object';
+    }
+    if (cleanedParams.type === 'object' && cleanedParams.properties === undefined) {
+      cleanedParams.properties = {};
+    }
+    
+    const originalName = tool.name;
+    const safeName = sanitizeToolName(originalName);
+    
+    // 缓存映射
+    if (sessionId && actualModelName && safeName !== originalName) {
+      setToolNameMapping(sessionId, actualModelName, safeName, originalName);
+    }
+    
+    return {
+      functionDeclarations: [
+        {
+          name: safeName,
+          description: tool.description || '',
+          parameters: cleanedParams
+        }
+      ]
+    };
+  });
+}
+
+/**
+ * 生成 Claude 请求体并转换为 Antigravity 格式
+ */
+function generateClaudeRequestBody(claudeMessages, modelName, parameters, claudeTools, systemPrompt, token) {
+  const enableThinking = isEnableThinking(modelName);
+  const actualModelName = modelMapping(modelName);
+  
+  // 合并 system 指令
+  const baseSystem = config.systemInstruction || '';
+  let mergedSystem = '';
+  
+  if (config.useContextSystemPrompt && systemPrompt) {
+    const parts = [];
+    if (baseSystem.trim()) parts.push(baseSystem.trim());
+    if (systemPrompt.trim()) parts.push(systemPrompt.trim());
+    mergedSystem = parts.join('\n\n');
+  } else {
+    mergedSystem = baseSystem;
+  }
+  
+  const requestBody = {
+    project: token.projectId,
+    requestId: generateRequestId(),
+    request: {
+      contents: claudeMessageToAntigravity(claudeMessages, enableThinking, actualModelName, token.sessionId),
+      tools: convertClaudeToolsToAntigravity(claudeTools, token.sessionId, actualModelName),
+      toolConfig: {
+        functionCallingConfig: {
+          mode: "VALIDATED"
+        }
+      },
+      generationConfig: generateGenerationConfig(parameters, enableThinking, actualModelName),
+      sessionId: token.sessionId
+    },
+    model: actualModelName,
+    userAgent: "antigravity"
+  };
+  
+  // 只有当有 system 指令时才添加
+  if (mergedSystem) {
+    requestBody.request.systemInstruction = {
+      role: "user",
+      parts: [{ text: mergedSystem }]
+    };
+  }
+  
+  return requestBody;
+}
+
 export{
   generateRequestId,
   generateRequestBody,
   generateGeminiRequestBody,
+  generateClaudeRequestBody,
   prepareImageRequest,
   getDefaultIp
 }
