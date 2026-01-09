@@ -149,8 +149,12 @@ async function loadConfig() {
             }
             
             // 加载官方系统提示词
-            if (env.OFFICIAL_SYSTEM_PROMPT !== undefined) {
-                if (form.elements['OFFICIAL_SYSTEM_PROMPT']) form.elements['OFFICIAL_SYSTEM_PROMPT'].value = env.OFFICIAL_SYSTEM_PROMPT || '';
+            if (form.elements['OFFICIAL_SYSTEM_PROMPT']) {
+                if (env.OFFICIAL_SYSTEM_PROMPT !== undefined) {
+                    form.elements['OFFICIAL_SYSTEM_PROMPT'].value = env.OFFICIAL_SYSTEM_PROMPT;
+                } else {
+                    form.elements['OFFICIAL_SYSTEM_PROMPT'].value = DEFAULT_OFFICIAL_SYSTEM_PROMPT;
+                }
             }
             
             // 更新合并提示词开关状态
