@@ -10,36 +10,19 @@ import logger from '../../utils/logger.js';
 import config from '../../config/config.js';
 import tokenManager from '../../auth/token_manager.js';
 import {
+  createOpenAIStreamChunk as createStreamChunk,
+  createOpenAIChatCompletionResponse
+} from '../formatters/openai.js';
+import { validateIncomingChatRequest } from '../validators/chat.js';
+import { getSafeRetries } from './common/retry.js';
+import {
   createResponseMeta,
   setStreamHeaders,
   createHeartbeat,
-  getChunkObject,
-  releaseChunkObject,
   writeStreamData,
   endStream,
   with429Retry
 } from '../stream.js';
-
-/**
- * 创建流式数据块
- * 支持 DeepSeek 格式的 reasoning_content
- * @param {string} id - 响应ID
- * @param {number} created - 创建时间戳
- * @param {string} model - 模型名称
- * @param {Object} delta - 增量内容
- * @param {string|null} finish_reason - 结束原因
- * @returns {Object}
- */
-export const createStreamChunk = (id, created, model, delta, finish_reason = null) => {
-  const chunk = getChunkObject();
-  chunk.id = id;
-  chunk.object = 'chat.completion.chunk';
-  chunk.created = created;
-  chunk.model = model;
-  chunk.choices[0].delta = delta;
-  chunk.choices[0].finish_reason = finish_reason;
-  return chunk;
-};
 
 /**
  * 处理 OpenAI 格式的聊天请求
@@ -47,11 +30,16 @@ export const createStreamChunk = (id, created, model, delta, finish_reason = nul
  * @param {Response} res - Express响应对象
  */
 export const handleOpenAIRequest = async (req, res) => {
-  const { messages, model, stream = false, tools, ...params } = req.body;
+  const body = req.body || {};
+  const { messages, model, stream = false, tools, ...params } = body;
 
   try {
-    if (!messages) {
-      return res.status(400).json({ error: 'messages is required' });
+    const validation = validateIncomingChatRequest('openai', body);
+    if (!validation.ok) {
+      return res.status(validation.status).json({ error: validation.message });
+    }
+    if (typeof model !== 'string' || !model) {
+      return res.status(400).json({ error: 'model is required' });
     }
 
     const token = await tokenManager.getToken(model);
@@ -67,8 +55,7 @@ export const handleOpenAIRequest = async (req, res) => {
     }
     //console.log(JSON.stringify(requestBody,null,2));
     const { id, created } = createResponseMeta();
-    const maxRetries = Number(config.retryTimes || 0);
-    const safeRetries = maxRetries > 0 ? Math.floor(maxRetries) : 0;
+    const safeRetries = getSafeRetries(config.retryTimes);
 
     if (stream) {
       setStreamHeaders(res);
@@ -188,20 +175,18 @@ export const handleOpenAIRequest = async (req, res) => {
           }
         }
 
-        const response = {
+        res.json(createOpenAIChatCompletionResponse({
           id,
-          object: 'chat.completion',
           created,
           model,
-          choices: [{
-            index: 0,
-            message,
-            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop'
-          }],
-          usage: usageData
-        };
-
-        res.json(response);
+          content,
+          reasoningContent,
+          reasoningSignature,
+          toolCalls,
+          usage: usageData,
+          passSignatureToClient: config.passSignatureToClient,
+          stripToolCallSignature: !config.passSignatureToClient
+        }));
       } catch (error) {
         logger.error('假非流生成响应失败:', error.message);
         if (res.headersSent) return;
@@ -236,20 +221,18 @@ export const handleOpenAIRequest = async (req, res) => {
       }
 
       // 使用预构建的响应对象，减少内存分配
-      const response = {
+      res.json(createOpenAIChatCompletionResponse({
         id,
-        object: 'chat.completion',
         created,
         model,
-        choices: [{
-          index: 0,
-          message,
-          finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop'
-        }],
-        usage
-      };
-
-      res.json(response);
+        content,
+        reasoningContent,
+        reasoningSignature,
+        toolCalls,
+        usage,
+        passSignatureToClient: config.passSignatureToClient,
+        stripToolCallSignature: !config.passSignatureToClient
+      }));
     }
   } catch (error) {
     logger.error('生成响应失败:', error.message);

@@ -23,6 +23,7 @@ import sdRouter from '../routes/sd.js';
 import openaiRouter from '../routes/openai.js';
 import geminiRouter from '../routes/gemini.js';
 import claudeRouter from '../routes/claude.js';
+import cliRouter from '../routes/cli.js';
 
 const publicDir = getPublicDir();
 
@@ -93,7 +94,7 @@ app.use('/sdapi/v1', sdRouter);
 
 // ==================== API Key 验证中间件 ====================
 app.use((req, res, next) => {
-  if (req.path.startsWith('/v1/')) {
+  if (req.path.startsWith('/v1/') || req.path.startsWith('/cli/v1/')) {
     const apiKey = config.security?.apiKey;
     if (apiKey) {
       const authHeader = req.headers.authorization || req.headers['x-api-key'];
@@ -129,6 +130,9 @@ app.use('/v1beta', geminiRouter);
 // Claude 兼容 API（/v1/messages 由 claudeRouter 处理）
 app.use('/v1', claudeRouter);
 
+// Gemini CLI 兼容 API
+app.use('/cli', cliRouter);
+
 // ==================== 系统端点 ====================
 
 // 内存监控端点
@@ -159,7 +163,6 @@ app.use((req, res, next) => {
     '/robots.txt',
     '/.well-known',
     // 管理后台和日志
-    '/admin',
     '/ws/logs',
     // Claude API 相关端点
     '/api/event_logging',

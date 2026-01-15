@@ -101,6 +101,10 @@
             display: flex !important;
         }
 
+        html.tab-logs #geminicliPage {
+            display: none !important;
+        }
+
         html.tab-logs .tab[data-tab="tokens"] {
             background: transparent !important;
             color: var(--text-light, #888) !important;
@@ -114,6 +118,57 @@
         html.tab-logs .tab[data-tab="logs"] {
             background: var(--primary, #4f46e5) !important;
             color: white !important;
+        }
+
+        html.tab-logs .tab[data-tab="geminicli"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
+        }
+
+        /* Gemini CLI Tab 状态 */
+        html.tab-geminicli #tokensPage {
+            display: none !important;
+        }
+
+        html.tab-geminicli #settingsPage {
+            display: none !important;
+        }
+
+        html.tab-geminicli #logsPage {
+            display: none !important;
+        }
+
+        html.tab-geminicli #geminicliPage {
+            display: block !important;
+        }
+
+        html.tab-geminicli .tab[data-tab="tokens"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
+        }
+
+        html.tab-geminicli .tab[data-tab="settings"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
+        }
+
+        html.tab-geminicli .tab[data-tab="logs"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
+        }
+
+        html.tab-geminicli .tab[data-tab="geminicli"] {
+            background: var(--primary, #4f46e5) !important;
+            color: white !important;
+        }
+
+        html.tab-settings #geminicliPage {
+            display: none !important;
+        }
+
+        html.tab-settings .tab[data-tab="geminicli"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
         }
 
         /* 加载指示器样式 */
@@ -194,14 +249,16 @@
         <!-- 主内容 -->
         <div id="mainContent" class="main-content hidden">
             <div class="header">
-                <div class="tabs">
-                    <button class="tab active" data-tab="tokens" onclick="switchTab('tokens')"><span
-                            class="tab-icon">🎯</span><span class="tab-text">Token</span></button>
-                    <button class="tab" data-tab="settings" onclick="switchTab('settings')"><span
-                            class="tab-icon">⚙️</span><span class="tab-text">设置</span></button>
-                    <button class="tab" data-tab="logs" onclick="switchTab('logs')"><span
-                            class="tab-icon">📋</span><span class="tab-text">日志</span></button>
-                </div>
+            <div class="tabs">
+                <button class="tab active" data-tab="tokens" onclick="switchTab('tokens')"><span
+                        class="tab-icon">🎯</span><span class="tab-text">Token</span></button>
+                <button class="tab" data-tab="geminicli" onclick="switchTab('geminicli')"><span
+                        class="tab-icon">💎</span><span class="tab-text">CLI</span></button>
+                <button class="tab" data-tab="settings" onclick="switchTab('settings')"><span
+                        class="tab-icon">⚙️</span><span class="tab-text">设置</span></button>
+                <button class="tab" data-tab="logs" onclick="switchTab('logs')"><span
+                        class="tab-icon">📋</span><span class="tab-text">日志</span></button>
+            </div>
                 <div class="header-right">
                     <button onclick="logout()">🚪 退出</button>
                 </div>
@@ -249,6 +306,47 @@
                         <div class="empty-state">
                             <div class="empty-state-icon">📦</div>
                             <div class="empty-state-text">暂无Token</div>
+                            <div class="empty-state-hint">点击上方OAuth按钮添加Token</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gemini CLI 页面 -->
+                <div id="geminicliPage" class="hidden">
+                    <!-- 统计卡片 + 操作按钮 -->
+                    <div class="top-bar">
+                        <div class="stats-inline">
+                            <div class="stat-item clickable active" onclick="filterGeminiCliTokens('all')">
+                                <span class="stat-num" id="geminicliTotalTokens">0</span>
+                                <span class="stat-text">总数</span>
+                            </div>
+                            <div class="stat-item success clickable" onclick="filterGeminiCliTokens('enabled')">
+                                <span class="stat-num" id="geminicliEnabledTokens">0</span>
+                                <span class="stat-text">启用</span>
+                            </div>
+                            <div class="stat-item danger clickable" onclick="filterGeminiCliTokens('disabled')">
+                                <span class="stat-num" id="geminicliDisabledTokens">0</span>
+                                <span class="stat-text">禁用</span>
+                            </div>
+                        </div>
+                        <div class="action-btns">
+                            <button type="button" onclick="showGeminiCliOAuthModal()" class="btn btn-success btn-sm">🔐
+                                OAuth</button>
+                            <button type="button" onclick="toggleSensitiveInfo()" class="btn btn-secondary btn-sm"
+                                title="点击显示敏感信息">🙈 隐藏</button>
+                            <button type="button" onclick="reloadGeminiCliTokens()" class="btn btn-warning btn-sm">🔄 重载</button>
+                            <button type="button" onclick="exportGeminiCliTokens()" class="btn btn-sm"
+                                style="background: var(--primary);" title="导出Token">📤 导出</button>
+                            <button type="button" onclick="importGeminiCliTokens()" class="btn btn-sm"
+                                style="background: var(--primary);" title="添加/导入Token">📥 导入</button>
+                        </div>
+                    </div>
+
+                    <!-- Token网格 -->
+                    <div id="geminicliTokenList" class="token-grid">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📦</div>
+                            <div class="empty-state-text">暂无Gemini CLI Token</div>
                             <div class="empty-state-hint">点击上方OAuth按钮添加Token</div>
                         </div>
                     </div>
@@ -599,6 +697,7 @@
     <script src="js/auth.js" defer></script>
     <script src="js/quota.js" defer></script>
     <script src="js/tokens.js" defer></script>
+    <script src="js/geminicli.js" defer></script>
     <script src="js/config.js" defer></script>
     <script src="js/logs.js" defer></script>
     <script src="js/main.js" defer></script>

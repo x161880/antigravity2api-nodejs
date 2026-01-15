@@ -10,6 +10,9 @@ import { buildClaudeErrorPayload } from '../../utils/errors.js';
 import logger from '../../utils/logger.js';
 import config from '../../config/config.js';
 import tokenManager from '../../auth/token_manager.js';
+import { createClaudeResponse } from '../formatters/claude.js';
+import { validateIncomingChatRequest } from '../validators/chat.js';
+import { getSafeRetries } from './common/retry.js';
 import {
   setStreamHeaders,
   createHeartbeat,
@@ -38,69 +41,6 @@ export const createClaudeStreamEvent = (eventType, data) => {
  * @param {Object|null} usage - 使用量统计
  * @returns {Object}
  */
-export const createClaudeResponse = (id, model, content, reasoning, reasoningSignature, toolCalls, stopReason, usage) => {
-  const contentBlocks = [];
-
-  // 思维链内容（如果有）- Claude 格式用 thinking 类型
-  if (reasoning) {
-    const thinkingBlock = {
-      type: "thinking",
-      thinking: reasoning
-    };
-    if (reasoningSignature && config.passSignatureToClient) {
-      thinkingBlock.signature = reasoningSignature;
-    }
-    contentBlocks.push(thinkingBlock);
-  }
-
-  // 文本内容
-  if (content) {
-    contentBlocks.push({
-      type: "text",
-      text: content
-    });
-  }
-
-  // 工具调用
-  if (toolCalls && toolCalls.length > 0) {
-    for (const tc of toolCalls) {
-      try {
-        const toolBlock = {
-          type: "tool_use",
-          id: tc.id,
-          name: tc.function.name,
-          input: JSON.parse(tc.function.arguments)
-        };
-        if (tc.thoughtSignature && config.passSignatureToClient) {
-          toolBlock.signature = tc.thoughtSignature;
-        }
-        contentBlocks.push(toolBlock);
-      } catch (e) {
-        // 解析失败时传入空对象
-        contentBlocks.push({
-          type: "tool_use",
-          id: tc.id,
-          name: tc.function.name,
-          input: {}
-        });
-      }
-    }
-  }
-
-  return {
-    id: id,
-    type: "message",
-    role: "assistant",
-    content: contentBlocks,
-    model: model,
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: usage ? {
-      input_tokens: usage.prompt_tokens || 0,
-      output_tokens: usage.completion_tokens || 0
-    } : { input_tokens: 0, output_tokens: 0 }
-  };
-};
 
 /**
  * 处理 Claude 格式的聊天请求
@@ -109,11 +49,16 @@ export const createClaudeResponse = (id, model, content, reasoning, reasoningSig
  * @param {boolean} isStream - 是否流式响应
  */
 export const handleClaudeRequest = async (req, res, isStream) => {
-  const { messages, model, system, tools, ...rawParams } = req.body;
+  const body = req.body || {};
+  const { messages, model, system, tools, ...rawParams } = body;
 
   try {
-    if (!messages) {
-      return res.status(400).json(buildClaudeErrorPayload({ message: 'messages is required' }, 400));
+    const validation = validateIncomingChatRequest('claude', body);
+    if (!validation.ok) {
+      return res.status(validation.status).json(buildClaudeErrorPayload({ message: validation.message }, validation.status));
+    }
+    if (typeof model !== 'string' || !model) {
+      return res.status(400).json(buildClaudeErrorPayload({ message: 'model is required' }, 400));
     }
 
     const token = await tokenManager.getToken(model);
@@ -132,8 +77,7 @@ export const handleClaudeRequest = async (req, res, isStream) => {
     }
 
     const msgId = `msg_${Date.now()}`;
-    const maxRetries = Number(config.retryTimes || 0);
-    const safeRetries = maxRetries > 0 ? Math.floor(maxRetries) : 0;
+    const safeRetries = getSafeRetries(config.retryTimes);
 
     if (isStream) {
       setStreamHeaders(res);
@@ -377,7 +321,8 @@ export const handleClaudeRequest = async (req, res, isStream) => {
           reasoningSignature,
           toolCalls,
           stopReason,
-          usageData
+          usageData,
+          { passSignatureToClient: config.passSignatureToClient }
         );
 
         res.json(response);
@@ -408,7 +353,8 @@ export const handleClaudeRequest = async (req, res, isStream) => {
         reasoningSignature,
         toolCalls,
         stopReason,
-        usage
+        usage,
+        { passSignatureToClient: config.passSignatureToClient }
       );
 
       res.json(response);

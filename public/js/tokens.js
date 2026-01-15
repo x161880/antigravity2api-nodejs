@@ -283,46 +283,27 @@ function showImportUploadModal() {
     const manualAccessToken = document.getElementById('manualAccessToken');
     const manualRefreshToken = document.getElementById('manualRefreshToken');
 
+    // 通用绑定：dropzone + 遮罩点击关闭
+    const cleanupDropzone = (typeof wireJsonFileDropzone === 'function')
+        ? wireJsonFileDropzone({
+            dropzone,
+            fileInput,
+            onFile: (file) => handleImportFile(file),
+            onError: (message) => showToast(message, 'warning')
+        })
+        : null;
+    const cleanupBackdrop = (typeof wireModalBackdropClose === 'function')
+        ? wireModalBackdropClose(modal, closeImportModal)
+        : null;
+
     // 创建事件处理器
     const handlers = {
-        dropzoneClick: () => fileInput.click(),
-        fileChange: (e) => {
-            if (e.target.files[0]) {
-                handleImportFile(e.target.files[0]);
-            }
-        },
-        dragover: (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzone.classList.add('dragover');
-        },
-        dragleave: (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzone.classList.remove('dragover');
-        },
-        drop: (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzone.classList.remove('dragover');
-
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                const file = files[0];
-                if (file.name.endsWith('.json')) {
-                    handleImportFile(file);
-                } else {
-                    showToast('请选择 JSON 文件', 'warning');
-                }
-            }
-        },
         updateManualBtnState: () => {
             if (currentImportTab === 'manual') {
                 const confirmBtn = document.getElementById('confirmImportBtn');
                 confirmBtn.disabled = !manualAccessToken.value.trim() || !manualRefreshToken.value.trim();
             }
-        },
-        modalClick: (e) => { if (e.target === modal) closeImportModal(); }
+        }
     };
 
     // 保存处理器引用
@@ -332,18 +313,16 @@ function showImportUploadModal() {
         fileInput,
         manualAccessToken,
         manualRefreshToken,
-        handlers
+        handlers,
+        cleanup: () => {
+            try { cleanupDropzone && cleanupDropzone(); } catch { /* ignore */ }
+            try { cleanupBackdrop && cleanupBackdrop(); } catch { /* ignore */ }
+        }
     };
 
-    // 绑定事件
-    dropzone.addEventListener('click', handlers.dropzoneClick);
-    fileInput.addEventListener('change', handlers.fileChange);
-    dropzone.addEventListener('dragover', handlers.dragover);
-    dropzone.addEventListener('dragleave', handlers.dragleave);
-    dropzone.addEventListener('drop', handlers.drop);
+    // 绑定事件（手动填入模式仍保留现有逻辑）
     manualAccessToken.addEventListener('input', handlers.updateManualBtnState);
     manualRefreshToken.addEventListener('input', handlers.updateManualBtnState);
-    modal.addEventListener('click', handlers.modalClick);
 }
 
 // 切换导入方式标签
@@ -598,25 +577,34 @@ function clearImportFile() {
 function closeImportModal() {
     // 清理事件监听器
     if (importModalHandlers) {
-        const { modal, dropzone, fileInput, manualAccessToken, manualRefreshToken, handlers } = importModalHandlers;
+        const { manualAccessToken, manualRefreshToken, handlers, cleanup } = importModalHandlers;
 
-        if (dropzone) {
-            dropzone.removeEventListener('click', handlers.dropzoneClick);
-            dropzone.removeEventListener('dragover', handlers.dragover);
-            dropzone.removeEventListener('dragleave', handlers.dragleave);
-            dropzone.removeEventListener('drop', handlers.drop);
+        // 新模式：统一 cleanup（dropzone/backdrop 等）
+        if (typeof cleanup === 'function') {
+            try { cleanup(); } catch { /* ignore */ }
+        } else {
+            // 旧模式兼容（保留，以防外部改动导致未注入 cleanup）
+            const { modal, dropzone, fileInput } = importModalHandlers;
+            if (dropzone && handlers) {
+                if (handlers.dropzoneClick) dropzone.removeEventListener('click', handlers.dropzoneClick);
+                if (handlers.dragover) dropzone.removeEventListener('dragover', handlers.dragover);
+                if (handlers.dragleave) dropzone.removeEventListener('dragleave', handlers.dragleave);
+                if (handlers.drop) dropzone.removeEventListener('drop', handlers.drop);
+            }
+            if (fileInput && handlers?.fileChange) {
+                fileInput.removeEventListener('change', handlers.fileChange);
+            }
+            if (modal && handlers?.modalClick) {
+                modal.removeEventListener('click', handlers.modalClick);
+            }
         }
-        if (fileInput) {
-            fileInput.removeEventListener('change', handlers.fileChange);
-        }
-        if (manualAccessToken) {
+
+        // 手动填入模式的监听解绑
+        if (manualAccessToken && handlers?.updateManualBtnState) {
             manualAccessToken.removeEventListener('input', handlers.updateManualBtnState);
         }
-        if (manualRefreshToken) {
+        if (manualRefreshToken && handlers?.updateManualBtnState) {
             manualRefreshToken.removeEventListener('input', handlers.updateManualBtnState);
-        }
-        if (modal) {
-            modal.removeEventListener('click', handlers.modalClick);
         }
 
         importModalHandlers = null;

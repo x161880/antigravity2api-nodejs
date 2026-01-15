@@ -224,7 +224,7 @@ export function getProxyConfig() {
   return systemProxy || null;
 }
 
-// 默认 API 配置
+// 默认 API 配置（Antigravity）
 const DEFAULT_API_CONFIGS = {
   sandbox: {
     url: 'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse',
@@ -240,8 +240,17 @@ const DEFAULT_API_CONFIGS = {
   }
 };
 
+// Gemini CLI API 配置（来自 gcli2api 项目）
+// 使用 v1internal 端点，模型名称在请求体中指定
+const DEFAULT_GEMINICLI_API_CONFIG = {
+  url: 'https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse',
+  noStreamUrl: 'https://cloudcode-pa.googleapis.com/v1internal:generateContent',
+  host: 'cloudcode-pa.googleapis.com',
+  userAgent: 'GeminiCLI/0.1.5 (Windows; AMD64)'
+};
+
 /**
- * 获取当前使用的 API 配置
+ * 获取当前使用的 API 配置（Antigravity）
  * @param {Object} jsonConfig - JSON 配置对象
  * @returns {Object} 当前 API 配置
  */
@@ -257,6 +266,22 @@ function getActiveApiConfig(jsonConfig) {
     noStreamUrl: customConfig?.noStreamUrl || defaultConfig.noStreamUrl,
     host: customConfig?.host || defaultConfig.host,
     userAgent: jsonConfig.api?.userAgent || 'antigravity/1.13.3 windows/amd64'
+  };
+}
+
+/**
+ * 获取 Gemini CLI API 配置
+ * @param {Object} jsonConfig - JSON 配置对象
+ * @returns {Object} Gemini CLI API 配置
+ */
+function getGeminiCliApiConfig(jsonConfig) {
+  const customConfig = jsonConfig.geminicli?.api;
+  
+  return {
+    url: customConfig?.url || DEFAULT_GEMINICLI_API_CONFIG.url,
+    noStreamUrl: customConfig?.noStreamUrl || DEFAULT_GEMINICLI_API_CONFIG.noStreamUrl,
+    host: customConfig?.host || DEFAULT_GEMINICLI_API_CONFIG.host,
+    userAgent: customConfig?.userAgent || DEFAULT_GEMINICLI_API_CONFIG.userAgent
   };
 }
 
@@ -331,7 +356,28 @@ export function buildConfig(jsonConfig) {
     // 假非流：非流式请求使用流式获取数据后返回非流式格式（默认启用）
     fakeNonStream: jsonConfig.other?.fakeNonStream !== false,
     // 调试：完整打印最终请求体与原始响应（可能包含敏感内容/大体积数据，只从环境变量读取）
-    debugDumpRequestResponse: process.env.DEBUG_DUMP_REQUEST_RESPONSE === '1'
+    debugDumpRequestResponse: process.env.DEBUG_DUMP_REQUEST_RESPONSE === '1',
+    
+    // ==================== Gemini CLI 配置 ====================
+    geminicli: {
+      // 是否启用 Gemini CLI 反代功能
+      enabled: jsonConfig.geminicli?.enabled !== false,
+      // API 配置
+      api: getGeminiCliApiConfig(jsonConfig),
+      // Token 轮换策略
+      rotation: {
+        strategy: jsonConfig.geminicli?.rotation?.strategy || 'round_robin',
+        requestCount: jsonConfig.geminicli?.rotation?.requestCount || 10
+      },
+      // 默认生成参数（可覆盖全局默认值）
+      defaults: {
+        temperature: jsonConfig.geminicli?.defaults?.temperature ?? jsonConfig.defaults?.temperature ?? DEFAULT_GENERATION_PARAMS.temperature,
+        top_p: jsonConfig.geminicli?.defaults?.topP ?? jsonConfig.defaults?.topP ?? DEFAULT_GENERATION_PARAMS.top_p,
+        top_k: jsonConfig.geminicli?.defaults?.topK ?? jsonConfig.defaults?.topK ?? DEFAULT_GENERATION_PARAMS.top_k,
+        max_tokens: jsonConfig.geminicli?.defaults?.maxTokens ?? jsonConfig.defaults?.maxTokens ?? DEFAULT_GENERATION_PARAMS.max_tokens,
+        thinking_budget: jsonConfig.geminicli?.defaults?.thinkingBudget ?? jsonConfig.defaults?.thinkingBudget ?? DEFAULT_GENERATION_PARAMS.thinking_budget
+      }
+    }
   };
 }
 
